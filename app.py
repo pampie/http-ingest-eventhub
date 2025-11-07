@@ -6,8 +6,17 @@ import base64
 import gzip
 import json
 import logging
-import os 
+import os
+import sys
 
+
+# Configure logging BEFORE any other code
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -21,25 +30,40 @@ EVENTHUB_CONNECTION_STRING = os.environ.get('EVENTHUB_CONNECTION_STRING')  # Opt
 BASIC_AUTH_USERNAME = os.environ.get('BASIC_AUTH_USERNAME', 'admin')
 BASIC_AUTH_PASSWORD = os.environ.get('BASIC_AUTH_PASSWORD', 'password')
 
-# Validate configuration
-if EVENTHUB_CONNECTION_STRING:
-    # Using connection string authentication
-    producer_client = EventHubProducerClient.from_connection_string(
-        conn_str=EVENTHUB_CONNECTION_STRING,
-        eventhub_name=EVENTHUB_NAME
-    )
-    logging.info("Event Hub producer initialized with connection string")
-elif EVENTHUB_FULLY_QUALIFIED_NAMESPACE and EVENTHUB_NAME:
-    # Using Managed Identity / DefaultAzureCredential (recommended for production)
-    credential = DefaultAzureCredential()
-    producer_client = EventHubProducerClient(
-        fully_qualified_namespace=EVENTHUB_FULLY_QUALIFIED_NAMESPACE,
-        eventhub_name=EVENTHUB_NAME,
-        credential=credential
-    )
-    logging.info("Event Hub producer initialized with Managed Identity")
-else:
-    raise Exception("Please configure Event Hub connection: either EVENTHUB_CONNECTION_STRING or both EVENTHUB_FULLY_QUALIFIED_NAMESPACE and EVENTHUB_NAME")
+# Debug: Print configuration (without exposing full secrets)
+logger.info("=== Event Hub Configuration ===")
+logger.info(f"EVENTHUB_NAME: {EVENTHUB_NAME}")
+logger.info(f"EVENTHUB_CONNECTION_STRING present: {bool(EVENTHUB_CONNECTION_STRING)}")
+logger.info(f"EVENTHUB_FULLY_QUALIFIED_NAMESPACE: {EVENTHUB_FULLY_QUALIFIED_NAMESPACE}")
+
+# Validate and initialize Event Hub producer
+producer_client = None
+try:
+    if EVENTHUB_CONNECTION_STRING:
+        # Using connection string authentication
+        logger.info("Initializing Event Hub producer with connection string...")
+        producer_client = EventHubProducerClient.from_connection_string(
+            conn_str=EVENTHUB_CONNECTION_STRING,
+            eventhub_name=EVENTHUB_NAME
+        )
+        logger.info("✓ Event Hub producer initialized successfully with connection string")
+    elif EVENTHUB_FULLY_QUALIFIED_NAMESPACE and EVENTHUB_NAME:
+        # Using Managed Identity / DefaultAzureCredential (recommended for production)
+        logger.info("Initializing Event Hub producer with Managed Identity...")
+        credential = DefaultAzureCredential()
+        producer_client = EventHubProducerClient(
+            fully_qualified_namespace=EVENTHUB_FULLY_QUALIFIED_NAMESPACE,
+            eventhub_name=EVENTHUB_NAME,
+            credential=credential
+        )
+        logger.info("✓ Event Hub producer initialized successfully with Managed Identity")
+    else:
+        error_msg = "Please configure Event Hub connection: either EVENTHUB_CONNECTION_STRING or both EVENTHUB_FULLY_QUALIFIED_NAMESPACE and EVENTHUB_NAME"
+        logger.error(error_msg)
+        raise Exception(error_msg)
+except Exception as init_error:
+    logger.error(f"Failed to initialize Event Hub producer: {init_error}")
+    raise
 
 BASIC_AUTH = base64.b64encode("{}:{}".format(BASIC_AUTH_USERNAME, BASIC_AUTH_PASSWORD).encode()).decode("utf-8")
 LOG_TYPE = 'Log-Type'
@@ -67,6 +91,11 @@ def send_to_eventhub(data, log_type=None):
     Raises:
         ProcessingException: If sending fails
     """
+    if producer_client is None:
+        error_msg = "Event Hub producer client is not initialized"
+        logger.error(error_msg)
+        raise ProcessingException(error_msg)
+    
     try:
         # Create event data batch
         event_data_batch = producer_client.create_batch()
@@ -83,11 +112,11 @@ def send_to_eventhub(data, log_type=None):
         
         # Send the batch to Event Hub
         producer_client.send_batch(event_data_batch)
-        logging.debug(f"Successfully sent event to Event Hub. Log Type: {log_type}")
+        logger.debug(f"Successfully sent event to Event Hub. Log Type: {log_type}")
         
     except Exception as e:
         error_msg = f"Failed to send event to Event Hub: {str(e)}"
-        logging.error(error_msg)
+        logger.error(error_msg)
         raise ProcessingException(error_msg)
 
 
