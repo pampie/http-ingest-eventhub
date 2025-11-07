@@ -130,17 +130,17 @@ def func():
         # Extract authorization header
         auth_header = request.headers.get("authorization")
         if not auth_header:
-            logging.error("Missing authorization header")
+            logger.error("Missing authorization header")
             raise UnAuthorizedException()
         
         # Verify Basic authentication
         if "Basic" in auth_header:
             basic_auth_value = auth_header.replace("Basic ", "").strip()
             if basic_auth_value != BASIC_AUTH:
-                logging.error("Unauthorized: Basic auth mismatch")
+                logger.error("Unauthorized: Basic auth mismatch")
                 raise UnAuthorizedException()
         else:
-            logging.error("Unauthorized: Basic auth not found")
+            logger.error("Unauthorized: Basic auth not found")
             raise UnAuthorizedException()
         
         # Get the log type from headers (optional)
@@ -152,31 +152,31 @@ def func():
         # Decompress payload
         try:
             decompressed = gzip.decompress(body)
-            logging.debug(f"Decompressed data: {len(decompressed)} bytes")
+            logger.debug(f"Decompressed data: {len(decompressed)} bytes")
         except Exception as decompress_error:
-            logging.error(f"Failed to decompress data: {decompress_error}")
+            logger.error(f"Failed to decompress data: {decompress_error}")
             # If decompression fails, try to use the body as-is
             if len(body) == 0:
-                logging.error("Empty body received")
+                logger.error("Empty body received")
                 return FAILURE_RESPONSE, 400, APPLICATION_JSON
             decompressed = body
         
         decomp_body_length = len(decompressed)
         if decomp_body_length == 0:
-            logging.error("Decompressed body is empty")
+            logger.error("Decompressed body is empty")
             return FAILURE_RESPONSE, 400, APPLICATION_JSON
         
         # Send to Event Hub
         send_to_eventhub(decompressed, log_type)
-        logging.info(f"Successfully forwarded {decomp_body_length} bytes to Event Hub")
+        logger.info(f"Successfully forwarded {decomp_body_length} bytes to Event Hub")
         
     except UnAuthorizedException:
         return FAILURE_RESPONSE, 401, APPLICATION_JSON
     except ProcessingException as e:
-        logging.error(f"Processing error: {e}")
+        logger.error(f"Processing error: {e}")
         return FAILURE_RESPONSE, 500, APPLICATION_JSON
     except Exception as e:
-        logging.error(f"Unexpected error: {e}")
+        logger.error(f"Unexpected error: {e}")
         return FAILURE_RESPONSE, 500, APPLICATION_JSON
        
     return SUCCESS_RESPONSE, 200, APPLICATION_JSON 
