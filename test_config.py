@@ -86,11 +86,48 @@ try:
         
         # Try to get properties (this validates the connection)
         print("\nValidating connection by getting Event Hub properties...")
-        props = producer.get_eventhub_properties()
-        print(f"✓ Connection validated!")
-        print(f"  - Event Hub Name: {props['name']}")
-        print(f"  - Partition Count: {len(props['partition_ids'])}")
-        print(f"  - Partition IDs: {props['partition_ids']}")
+        try:
+            props = producer.get_eventhub_properties()
+            print(f"✓ Connection validated!")
+            
+            # Try different ways to get the Event Hub name
+            eventhub_actual_name = None
+            if hasattr(props, 'name'):
+                eventhub_actual_name = props.name
+            elif isinstance(props, dict) and 'name' in props:
+                eventhub_actual_name = props['name']
+            
+            if eventhub_actual_name:
+                print(f"  - Event Hub Name: {eventhub_actual_name}")
+            else:
+                # Extract from connection string or use parameter
+                if 'EntityPath=' in eventhub_connection_string:
+                    import re
+                    entity_match = re.search(r'EntityPath=([^;]+)', eventhub_connection_string)
+                    if entity_match:
+                        print(f"  - Event Hub Name: {entity_match.group(1)} (from EntityPath)")
+                elif eventhub_name:
+                    print(f"  - Event Hub Name: {eventhub_name} (from parameter)")
+            
+            # Try to get partition info
+            if hasattr(props, 'partition_ids'):
+                print(f"  - Partition Count: {len(props.partition_ids)}")
+                print(f"  - Partition IDs: {list(props.partition_ids)}")
+            elif isinstance(props, dict) and 'partition_ids' in props:
+                print(f"  - Partition Count: {len(props['partition_ids'])}")
+                print(f"  - Partition IDs: {props['partition_ids']}")
+                
+        except Exception as prop_error:
+            print(f"⚠ Could not get properties (but connection might still work): {prop_error}")
+            print("  Attempting to send a test event instead...")
+            
+            # Try sending a test event
+            from azure.eventhub import EventData
+            test_batch = producer.create_batch()
+            test_event = EventData(b'{"test": "connection validation"}')
+            test_batch.add(test_event)
+            producer.send_batch(test_batch)
+            print("✓ Test event sent successfully!")
         
         producer.close()
         print("\n✓✓✓ ALL TESTS PASSED ✓✓✓")
@@ -108,11 +145,43 @@ try:
         
         # Try to get properties (this validates the connection)
         print("\nValidating connection by getting Event Hub properties...")
-        props = producer.get_eventhub_properties()
-        print(f"✓ Connection validated!")
-        print(f"  - Event Hub Name: {props['name']}")
-        print(f"  - Partition Count: {len(props['partition_ids'])}")
-        print(f"  - Partition IDs: {props['partition_ids']}")
+        try:
+            props = producer.get_eventhub_properties()
+            print(f"✓ Connection validated!")
+            
+            # Try different ways to get the Event Hub name
+            eventhub_actual_name = None
+            if hasattr(props, 'name'):
+                eventhub_actual_name = props.name
+            elif isinstance(props, dict) and 'name' in props:
+                eventhub_actual_name = props['name']
+            
+            if eventhub_actual_name:
+                print(f"  - Event Hub Name: {eventhub_actual_name}")
+            else:
+                # Use parameter for display
+                if eventhub_name:
+                    print(f"  - Event Hub Name: {eventhub_name} (from parameter)")
+            
+            # Try to get partition info
+            if hasattr(props, 'partition_ids'):
+                print(f"  - Partition Count: {len(props.partition_ids)}")
+                print(f"  - Partition IDs: {list(props.partition_ids)}")
+            elif isinstance(props, dict) and 'partition_ids' in props:
+                print(f"  - Partition Count: {len(props['partition_ids'])}")
+                print(f"  - Partition IDs: {props['partition_ids']}")
+                
+        except Exception as prop_error:
+            print(f"⚠ Could not get properties (but connection might still work): {prop_error}")
+            print("  Attempting to send a test event instead...")
+            
+            # Try sending a test event
+            from azure.eventhub import EventData
+            test_batch = producer.create_batch()
+            test_event = EventData(b'{"test": "connection validation"}')
+            test_batch.add(test_event)
+            producer.send_batch(test_batch)
+            print("✓ Test event sent successfully!")
         
         producer.close()
         print("\n✓✓✓ ALL TESTS PASSED ✓✓✓")

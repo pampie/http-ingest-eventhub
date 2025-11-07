@@ -21,14 +21,19 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 
-# Event Hub Configuration
-EVENTHUB_FULLY_QUALIFIED_NAMESPACE = os.environ.get('EVENTHUB_FULLY_QUALIFIED_NAMESPACE')  # e.g., 'yournamespace.servicebus.windows.net'
-EVENTHUB_NAME = os.environ.get('EVENTHUB_NAME')
-EVENTHUB_CONNECTION_STRING = os.environ.get('EVENTHUB_CONNECTION_STRING')  # Optional: for connection string auth
+# Event Hub Configuration - Clean and strip environment variables
+EVENTHUB_FULLY_QUALIFIED_NAMESPACE = os.environ.get('EVENTHUB_FULLY_QUALIFIED_NAMESPACE', '').strip().strip('"').strip("'")  # e.g., 'yournamespace.servicebus.windows.net'
+EVENTHUB_NAME = os.environ.get('EVENTHUB_NAME', '').strip().strip('"').strip("'")
+EVENTHUB_CONNECTION_STRING = os.environ.get('EVENTHUB_CONNECTION_STRING', '').strip().strip('"').strip("'")  # Optional: for connection string auth
+
+# Clean empty strings to None
+EVENTHUB_FULLY_QUALIFIED_NAMESPACE = EVENTHUB_FULLY_QUALIFIED_NAMESPACE if EVENTHUB_FULLY_QUALIFIED_NAMESPACE else None
+EVENTHUB_NAME = EVENTHUB_NAME if EVENTHUB_NAME else None
+EVENTHUB_CONNECTION_STRING = EVENTHUB_CONNECTION_STRING if EVENTHUB_CONNECTION_STRING else None
 
 # Basic Auth credentials for the HTTP endpoint
-BASIC_AUTH_USERNAME = os.environ.get('BASIC_AUTH_USERNAME', 'admin')
-BASIC_AUTH_PASSWORD = os.environ.get('BASIC_AUTH_PASSWORD', 'password')
+BASIC_AUTH_USERNAME = os.environ.get('BASIC_AUTH_USERNAME', 'admin').strip()
+BASIC_AUTH_PASSWORD = os.environ.get('BASIC_AUTH_PASSWORD', 'password').strip()
 
 # Debug: Print configuration (without exposing full secrets)
 logger.info("=== Event Hub Configuration ===")
@@ -38,6 +43,11 @@ if EVENTHUB_CONNECTION_STRING:
     # Check if EntityPath is in connection string
     has_entity_path = 'EntityPath=' in EVENTHUB_CONNECTION_STRING
     logger.info(f"Connection string contains EntityPath: {has_entity_path}")
+    logger.info(f"Connection string length: {len(EVENTHUB_CONNECTION_STRING)} characters")
+    # Show first 50 and last 20 chars for verification (without exposing full key)
+    if len(EVENTHUB_CONNECTION_STRING) > 100:
+        preview = f"{EVENTHUB_CONNECTION_STRING[:50]}...{EVENTHUB_CONNECTION_STRING[-20:]}"
+        logger.info(f"Connection string preview: {preview}")
 logger.info(f"EVENTHUB_FULLY_QUALIFIED_NAMESPACE: {EVENTHUB_FULLY_QUALIFIED_NAMESPACE}")
 
 # Validate and initialize Event Hub producer
