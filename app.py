@@ -190,10 +190,11 @@ def health():
 def cleanup():
     """Close Event Hub producer client on application shutdown"""
     try:
-        producer_client.close()
-        logging.info("Event Hub producer client closed")
+        if producer_client:
+            producer_client.close()
+            logger.info("Event Hub producer client closed")
     except Exception as e:
-        logging.error(f"Error closing Event Hub producer: {e}")
+        logger.error(f"Error closing Event Hub producer: {e}")
 
 
 if __name__ == '__main__':
