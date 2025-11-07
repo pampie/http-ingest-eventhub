@@ -20,6 +20,15 @@ if eventhub_connection_string:
     # Show first/last few characters to verify
     conn_str_preview = f"{eventhub_connection_string[:30]}...{eventhub_connection_string[-10:]}" if len(eventhub_connection_string) > 50 else eventhub_connection_string
     print(f"   Preview: {conn_str_preview}")
+    # Check for EntityPath
+    has_entity_path = 'EntityPath=' in eventhub_connection_string
+    print(f"   Contains EntityPath: {'✓ YES' if has_entity_path else '❌ NO'}")
+    if has_entity_path:
+        # Extract EntityPath value
+        import re
+        entity_match = re.search(r'EntityPath=([^;]+)', eventhub_connection_string)
+        if entity_match:
+            print(f"   EntityPath value: {entity_match.group(1)}")
 print(f"3. EVENTHUB_FULLY_QUALIFIED_NAMESPACE: {eventhub_namespace if eventhub_namespace else '❌ NOT SET'}")
 
 print("\n" + "=" * 60)
@@ -56,10 +65,23 @@ try:
     
     if eventhub_connection_string:
         print("\nAttempting to create producer with connection string...")
-        producer = EventHubProducerClient.from_connection_string(
-            conn_str=eventhub_connection_string,
-            eventhub_name=eventhub_name
-        )
+        
+        # Check if EntityPath is in connection string
+        if 'EntityPath=' in eventhub_connection_string:
+            print("Connection string contains EntityPath, using it directly...")
+            producer = EventHubProducerClient.from_connection_string(
+                conn_str=eventhub_connection_string
+            )
+        elif eventhub_name:
+            print(f"Using EVENTHUB_NAME parameter: {eventhub_name}")
+            producer = EventHubProducerClient.from_connection_string(
+                conn_str=eventhub_connection_string,
+                eventhub_name=eventhub_name
+            )
+        else:
+            print("❌ ERROR: Connection string doesn't have EntityPath and EVENTHUB_NAME is not set")
+            sys.exit(1)
+            
         print("✓ Producer client created successfully")
         
         # Try to get properties (this validates the connection)

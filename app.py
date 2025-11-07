@@ -34,6 +34,10 @@ BASIC_AUTH_PASSWORD = os.environ.get('BASIC_AUTH_PASSWORD', 'password')
 logger.info("=== Event Hub Configuration ===")
 logger.info(f"EVENTHUB_NAME: {EVENTHUB_NAME}")
 logger.info(f"EVENTHUB_CONNECTION_STRING present: {bool(EVENTHUB_CONNECTION_STRING)}")
+if EVENTHUB_CONNECTION_STRING:
+    # Check if EntityPath is in connection string
+    has_entity_path = 'EntityPath=' in EVENTHUB_CONNECTION_STRING
+    logger.info(f"Connection string contains EntityPath: {has_entity_path}")
 logger.info(f"EVENTHUB_FULLY_QUALIFIED_NAMESPACE: {EVENTHUB_FULLY_QUALIFIED_NAMESPACE}")
 
 # Validate and initialize Event Hub producer
@@ -42,11 +46,28 @@ try:
     if EVENTHUB_CONNECTION_STRING:
         # Using connection string authentication
         logger.info("Initializing Event Hub producer with connection string...")
-        producer_client = EventHubProducerClient.from_connection_string(
-            conn_str=EVENTHUB_CONNECTION_STRING,
-            eventhub_name=EVENTHUB_NAME
-        )
+        
+        # Check if EntityPath is already in the connection string
+        if 'EntityPath=' in EVENTHUB_CONNECTION_STRING:
+            # EntityPath is in connection string, don't pass eventhub_name
+            logger.info("EntityPath found in connection string, using it directly")
+            producer_client = EventHubProducerClient.from_connection_string(
+                conn_str=EVENTHUB_CONNECTION_STRING
+            )
+        elif EVENTHUB_NAME:
+            # EntityPath not in connection string, use eventhub_name parameter
+            logger.info(f"Using EVENTHUB_NAME parameter: {EVENTHUB_NAME}")
+            producer_client = EventHubProducerClient.from_connection_string(
+                conn_str=EVENTHUB_CONNECTION_STRING,
+                eventhub_name=EVENTHUB_NAME
+            )
+        else:
+            error_msg = "Connection string doesn't contain EntityPath and EVENTHUB_NAME is not set"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
         logger.info("✓ Event Hub producer initialized successfully with connection string")
+        
     elif EVENTHUB_FULLY_QUALIFIED_NAMESPACE and EVENTHUB_NAME:
         # Using Managed Identity / DefaultAzureCredential (recommended for production)
         logger.info("Initializing Event Hub producer with Managed Identity...")
@@ -97,26 +118,32 @@ def send_to_eventhub(data, log_type=None):
         raise ProcessingException(error_msg)
     
     try:
+        logger.debug("Creating event batch...")
         # Create event data batch
         event_data_batch = producer_client.create_batch()
         
+        logger.debug("Creating event data...")
         # Create event with the data
         event = EventData(data)
         
         # Add log type as event property if provided
         if log_type:
             event.properties['LogType'] = log_type
+            logger.debug(f"Added LogType property: {log_type}")
         
         # Add event to batch
+        logger.debug("Adding event to batch...")
         event_data_batch.add(event)
         
         # Send the batch to Event Hub
+        logger.info(f"Sending batch to Event Hub (size: {len(data)} bytes)...")
         producer_client.send_batch(event_data_batch)
-        logger.debug(f"Successfully sent event to Event Hub. Log Type: {log_type}")
+        logger.info(f"✓ Successfully sent event to Event Hub. Log Type: {log_type}")
         
     except Exception as e:
-        error_msg = f"Failed to send event to Event Hub: {str(e)}"
+        error_msg = f"Failed to send event to Event Hub: {type(e).__name__}: {str(e)}"
         logger.error(error_msg)
+        logger.exception("Full exception details:")
         raise ProcessingException(error_msg)
 
 
