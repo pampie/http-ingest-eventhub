@@ -44,10 +44,31 @@ if EVENTHUB_CONNECTION_STRING:
     has_entity_path = 'EntityPath=' in EVENTHUB_CONNECTION_STRING
     logger.info(f"Connection string contains EntityPath: {has_entity_path}")
     logger.info(f"Connection string length: {len(EVENTHUB_CONNECTION_STRING)} characters")
+    
+    # Extract and validate EntityPath
+    if has_entity_path:
+        import re
+        entity_match = re.search(r'EntityPath=([^;]+)', EVENTHUB_CONNECTION_STRING)
+        if entity_match:
+            entity_path_value = entity_match.group(1)
+            logger.info(f"EntityPath in connection string: {entity_path_value}")
+            if EVENTHUB_NAME and EVENTHUB_NAME != entity_path_value:
+                logger.warning(f"⚠️  MISMATCH: EVENTHUB_NAME ({EVENTHUB_NAME}) differs from EntityPath ({entity_path_value})")
+                logger.warning(f"⚠️  This will cause 'CBS Token authentication failed' error!")
+    
     # Show first 50 and last 20 chars for verification (without exposing full key)
     if len(EVENTHUB_CONNECTION_STRING) > 100:
         preview = f"{EVENTHUB_CONNECTION_STRING[:50]}...{EVENTHUB_CONNECTION_STRING[-20:]}"
         logger.info(f"Connection string preview: {preview}")
+    
+    # Check if connection string looks correct
+    required_parts = ['Endpoint=', 'SharedAccessKeyName=', 'SharedAccessKey=']
+    missing_parts = [part for part in required_parts if part not in EVENTHUB_CONNECTION_STRING]
+    if missing_parts:
+        logger.error(f"❌ Connection string missing required parts: {missing_parts}")
+    else:
+        logger.info("✓ Connection string contains all required parts")
+        
 logger.info(f"EVENTHUB_FULLY_QUALIFIED_NAMESPACE: {EVENTHUB_FULLY_QUALIFIED_NAMESPACE}")
 
 # Validate and initialize Event Hub producer
