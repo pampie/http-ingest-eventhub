@@ -106,6 +106,21 @@ logger.info(f"EVENTHUB_FULLY_QUALIFIED_NAMESPACE: {EVENTHUB_FULLY_QUALIFIED_NAME
 # Validate and initialize Event Hub producer
 producer_client = None
 try:
+    # Check if running in Azure with Managed Identity environment variables
+    msi_endpoint = os.environ.get('MSI_ENDPOINT')
+    msi_secret = os.environ.get('MSI_SECRET')
+    identity_endpoint = os.environ.get('IDENTITY_ENDPOINT')
+    identity_header = os.environ.get('IDENTITY_HEADER')
+    
+    if msi_endpoint or identity_endpoint:
+        logger.info("⚠️  Detected Azure Managed Identity environment variables:")
+        if msi_endpoint:
+            logger.info(f"   MSI_ENDPOINT: {msi_endpoint}")
+        if identity_endpoint:
+            logger.info(f"   IDENTITY_ENDPOINT: {identity_endpoint}")
+        logger.warning("⚠️  These may interfere with connection string authentication!")
+        logger.info("   Forcing connection string authentication...")
+    
     if EVENTHUB_CONNECTION_STRING:
         # Using connection string authentication
         logger.info("Initializing Event Hub producer with connection string...")
@@ -115,14 +130,17 @@ try:
             # EntityPath is in connection string, don't pass eventhub_name
             logger.info("EntityPath found in connection string, using it directly")
             producer_client = EventHubProducerClient.from_connection_string(
-                conn_str=EVENTHUB_CONNECTION_STRING
+                conn_str=EVENTHUB_CONNECTION_STRING,
+                # Important: Don't pass any credential parameter when using connection string
+                # This ensures it uses the SharedAccessKey from the connection string
             )
         elif EVENTHUB_NAME:
             # EntityPath not in connection string, use eventhub_name parameter
             logger.info(f"Using EVENTHUB_NAME parameter: {EVENTHUB_NAME}")
             producer_client = EventHubProducerClient.from_connection_string(
                 conn_str=EVENTHUB_CONNECTION_STRING,
-                eventhub_name=EVENTHUB_NAME
+                eventhub_name=EVENTHUB_NAME,
+                # Important: Don't pass any credential parameter
             )
         else:
             error_msg = "Connection string doesn't contain EntityPath and EVENTHUB_NAME is not set"
@@ -130,6 +148,7 @@ try:
             raise Exception(error_msg)
         
         logger.info("✓ Event Hub producer initialized successfully with connection string")
+        logger.info("✓ Using SharedAccessKey authentication (not Managed Identity)")
         
     elif EVENTHUB_FULLY_QUALIFIED_NAMESPACE and EVENTHUB_NAME:
         # Using Managed Identity / DefaultAzureCredential (recommended for production)
@@ -291,6 +310,24 @@ def config_check():
         "connection_string_set": EVENTHUB_CONNECTION_STRING is not None,
         "connection_string_length": len(EVENTHUB_CONNECTION_STRING) if EVENTHUB_CONNECTION_STRING else 0,
     }
+    
+    # Check for Azure Managed Identity environment variables
+    msi_endpoint = os.environ.get('MSI_ENDPOINT')
+    msi_secret = os.environ.get('MSI_SECRET')
+    identity_endpoint = os.environ.get('IDENTITY_ENDPOINT')
+    identity_header = os.environ.get('IDENTITY_HEADER')
+    
+    has_managed_identity_env = bool(msi_endpoint or identity_endpoint)
+    diagnostic_info['azure_managed_identity_detected'] = has_managed_identity_env
+    
+    if has_managed_identity_env:
+        diagnostic_info['managed_identity_env_vars'] = {
+            'MSI_ENDPOINT': bool(msi_endpoint),
+            'MSI_SECRET': bool(msi_secret),
+            'IDENTITY_ENDPOINT': bool(identity_endpoint),
+            'IDENTITY_HEADER': bool(identity_header)
+        }
+        diagnostic_info['managed_identity_warning'] = "Azure Managed Identity detected - may interfere with connection string authentication!"
     
     if EVENTHUB_CONNECTION_STRING:
         # Check for required parts
