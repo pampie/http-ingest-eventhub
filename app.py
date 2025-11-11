@@ -201,30 +201,137 @@ def send_to_eventhub(data, log_type=None):
         error_msg = "Event Hub producer client is not initialized"
         logger.error(error_msg)
         raise ProcessingException(error_msg)
-    
+
+    def _send_payloads_as_batches(payloads):
+        """Send an iterable of bytes payloads as EventData, batching them to respect EventDataBatch limits.
+
+        Raises ProcessingException if a single payload is too large to fit in an empty batch.
+        """
+        batches_sent_local = 0
+        batch = producer_client.create_batch()
+        items_in_batch = 0
+
+        for payload in payloads:
+            if not isinstance(payload, (bytes, bytearray)):
+                payload = str(payload).encode('utf-8')
+
+            event = EventData(payload)
+            if log_type:
+                event.properties['LogType'] = log_type
+
+            try:
+                batch.add(event)
+                items_in_batch += 1
+                logger.debug(f"Added event ({len(payload)} bytes) to current batch; items_in_batch={items_in_batch}")
+            except ValueError:
+                # Event didn't fit in current batch. If batch is empty, the single event is too large.
+                if items_in_batch == 0:
+                    error_msg = (
+                        f"Single event too large to fit in an empty EventDataBatch (event size {len(payload)} bytes). "
+                        "Event Hubs maximum batch size is ~1MB including overhead. "
+                        "Consider reducing individual record size or sending as compressed/segmented records."
+                    )
+                    logger.error(error_msg)
+                    raise ProcessingException(error_msg)
+
+                # send current batch and start a new one, then try adding again
+                try:
+                    producer_client.send_batch(batch)
+                    batches_sent_local += 1
+                    logger.info(f"Sent batch #{batches_sent_local} with {items_in_batch} events")
+                except Exception as e:
+                    error_msg = f"Failed to send event batch to Event Hub: {type(e).__name__}: {str(e)}"
+                    logger.error(error_msg)
+                    logger.exception("Full exception details:")
+                    raise ProcessingException(error_msg)
+
+                # new batch
+                batch = producer_client.create_batch()
+                items_in_batch = 0
+
+                # try adding the event again; if it still doesn't fit, it's too large
+                try:
+                    batch.add(event)
+                    items_in_batch = 1
+                    logger.debug(f"Added event after starting new batch; items_in_batch={items_in_batch}")
+                except ValueError:
+                    error_msg = (
+                        f"Single event too large to fit in an empty EventDataBatch (event size {len(payload)} bytes)."
+                    )
+                    logger.error(error_msg)
+                    raise ProcessingException(error_msg)
+
+        # send any remaining events
+        if items_in_batch > 0:
+            try:
+                producer_client.send_batch(batch)
+                batches_sent_local += 1
+                logger.info(f"Sent final batch #{batches_sent_local} with {items_in_batch} events")
+            except Exception as e:
+                error_msg = f"Failed to send final event batch to Event Hub: {type(e).__name__}: {str(e)}"
+                logger.error(error_msg)
+                logger.exception("Full exception details:")
+                raise ProcessingException(error_msg)
+
+        logger.info(f"✓ Successfully sent {batches_sent_local} batch(es). Log Type: {log_type}")
+
     try:
-        logger.debug("Creating event batch...")
-        # Create event data batch
-        event_data_batch = producer_client.create_batch()
-        
-        logger.debug("Creating event data...")
-        # Create event with the data
-        event = EventData(data)
-        
-        # Add log type as event property if provided
-        if log_type:
-            event.properties['LogType'] = log_type
-            logger.debug(f"Added LogType property: {log_type}")
-        
-        # Add event to batch
-        logger.debug("Adding event to batch...")
-        event_data_batch.add(event)
-        
-        # Send the batch to Event Hub
-        logger.info(f"Sending batch to Event Hub (size: {len(data)} bytes)...")
-        producer_client.send_batch(event_data_batch)
-        logger.info(f"✓ Successfully sent event to Event Hub. Log Type: {log_type}")
-        
+        # Normalize to bytes where needed
+        if isinstance(data, (bytes, bytearray)):
+            data_bytes = bytes(data)
+        else:
+            data_bytes = str(data).encode('utf-8')
+
+        # Try to detect JSON array or NDJSON (newline-delimited JSON)
+        try:
+            text = data_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            text = None
+
+        if text is not None:
+            stripped = text.strip()
+
+            # JSON array case: parse and send each element as individual event
+            if stripped.startswith('[') and stripped.endswith(']'):
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, list) and len(parsed) > 0:
+                        logger.debug(f"Detected JSON array with {len(parsed)} elements; sending each element as an event")
+                        payloads = [json.dumps(item).encode('utf-8') for item in parsed]
+                        _send_payloads_as_batches(payloads)
+                        return
+                except Exception as e:
+                    logger.debug(f"Failed to parse JSON array: {e}; falling back to NDJSON/byte-chunking")
+
+            # NDJSON case: send each non-empty line as an event
+            if '\n' in text:
+                lines = [ln for ln in text.splitlines() if ln.strip()]
+                if len(lines) > 1:
+                    logger.debug(f"Detected NDJSON with {len(lines)} non-empty lines; sending each line as an event")
+                    payloads = [ln.encode('utf-8') for ln in lines]
+                    _send_payloads_as_batches(payloads)
+                    return
+
+        # Fallback: binary or single large JSON object -> chunk into safe sizes
+        # We will split into chunks and send each chunk as an event. Note: this will break logical records
+        # if the payload contains structured JSON and you require each record intact. For large individual
+        # JSON records, prefer sending as JSON array or NDJSON.
+        total_size = len(data_bytes)
+        logger.debug(f"Fallback chunking path: total payload size {total_size} bytes")
+
+        safe_chunk_size = 900 * 1024
+        offset = 0
+        chunks = []
+        while offset < total_size:
+            next_size = min(total_size - offset, safe_chunk_size)
+            chunks.append(data_bytes[offset: offset + next_size])
+            offset += next_size
+
+        logger.debug(f"Split payload into {len(chunks)} chunk(s) of up to {safe_chunk_size} bytes")
+        _send_payloads_as_batches(chunks)
+
+    except ProcessingException:
+        raise
     except Exception as e:
         error_msg = f"Failed to send event to Event Hub: {type(e).__name__}: {str(e)}"
         logger.error(error_msg)
