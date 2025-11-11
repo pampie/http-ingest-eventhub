@@ -12,7 +12,7 @@ import sys
 
 # Configure logging BEFORE any other code
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.ERROR,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     stream=sys.stdout
 )
@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Check if we handle compressed message, default is true
+COMPRESSED_MESSAGE = os.environ.get('COMPRESSED_MESSAGE', 'true').lower() == 'true'
 
 # Event Hub Configuration - Clean and strip environment variables
 EVENTHUB_FULLY_QUALIFIED_NAMESPACE = os.environ.get('EVENTHUB_FULLY_QUALIFIED_NAMESPACE', '').strip().strip('"').strip("'")  # e.g., 'yournamespace.servicebus.windows.net'
@@ -40,6 +42,7 @@ logger.info("=== Event Hub Configuration ===")
 logger.info(f"EVENTHUB_NAME: {EVENTHUB_NAME}")
 logger.info(f"EVENTHUB_NAME type: {type(EVENTHUB_NAME)}")
 logger.info(f"EVENTHUB_CONNECTION_STRING present: {bool(EVENTHUB_CONNECTION_STRING)}")
+logger.info(f"COMPRESSED_MESSAGE: {COMPRESSED_MESSAGE}")
 
 # Log raw environment variable to detect Azure Portal issues
 raw_conn_str = os.environ.get('EVENTHUB_CONNECTION_STRING', '')
@@ -49,7 +52,7 @@ if raw_conn_str:
     
     # Check for common Azure Portal issues
     if raw_conn_str.startswith('"') or raw_conn_str.startswith("'"):
-        logger.warning("⚠️  Raw connection string starts with quote character!")
+        logger.warning("Raw connection string starts with quote character!")
     if raw_conn_str != EVENTHUB_CONNECTION_STRING:
         logger.info(f"✓ Connection string was cleaned (removed {len(raw_conn_str) - (len(EVENTHUB_CONNECTION_STRING) if EVENTHUB_CONNECTION_STRING else 0)} characters)")
 
@@ -61,8 +64,8 @@ if EVENTHUB_CONNECTION_STRING:
     
     # Check for minimum expected length
     if len(EVENTHUB_CONNECTION_STRING) < 150:
-        logger.warning(f"⚠️  Connection string seems too short ({len(EVENTHUB_CONNECTION_STRING)} chars). Expected 200-300 chars.")
-        logger.warning("⚠️  It may be truncated or incomplete!")
+        logger.warning(f"Connection string seems too short ({len(EVENTHUB_CONNECTION_STRING)} chars). Expected 200-300 chars.")
+        logger.warning("It may be truncated or incomplete!")
     
     # Extract and validate EntityPath
     if has_entity_path:
@@ -72,12 +75,12 @@ if EVENTHUB_CONNECTION_STRING:
             entity_path_value = entity_match.group(1)
             logger.info(f"EntityPath in connection string: {entity_path_value}")
             if EVENTHUB_NAME and EVENTHUB_NAME != entity_path_value:
-                logger.warning(f"⚠️  MISMATCH: EVENTHUB_NAME ({EVENTHUB_NAME}) differs from EntityPath ({entity_path_value})")
-                logger.warning(f"⚠️  This will cause 'CBS Token authentication failed' error!")
-                logger.warning(f"⚠️  SOLUTION: Remove EVENTHUB_NAME variable from Azure Web App config")
+                logger.warning(f"MISMATCH: EVENTHUB_NAME ({EVENTHUB_NAME}) differs from EntityPath ({entity_path_value})")
+                logger.warning(f"This will cause 'CBS Token authentication failed' error!")
+                logger.warning(f"SOLUTION: Remove EVENTHUB_NAME variable from Azure Web App config")
     else:
         if not EVENTHUB_NAME:
-            logger.error("❌ Connection string has no EntityPath AND EVENTHUB_NAME is not set!")
+            logger.error("Connection string has no EntityPath AND EVENTHUB_NAME is not set!")
         else:
             logger.info(f"✓ Will use EVENTHUB_NAME parameter: {EVENTHUB_NAME}")
     
@@ -88,18 +91,18 @@ if EVENTHUB_CONNECTION_STRING:
     else:
         # If too short, show more to help diagnose
         preview = f"{EVENTHUB_CONNECTION_STRING[:80]}..." if len(EVENTHUB_CONNECTION_STRING) > 80 else EVENTHUB_CONNECTION_STRING
-        logger.warning(f"⚠️  Short connection string: {preview}")
+        logger.warning(f"Short connection string: {preview}")
     
     # Check if connection string looks correct
     required_parts = ['Endpoint=', 'SharedAccessKeyName=', 'SharedAccessKey=']
     missing_parts = [part for part in required_parts if part not in EVENTHUB_CONNECTION_STRING]
     if missing_parts:
-        logger.error(f"❌ Connection string missing required parts: {missing_parts}")
-        logger.error(f"❌ This will cause authentication to fail!")
+        logger.error(f"Connection string missing required parts: {missing_parts}")
+        logger.error(f"This will cause authentication to fail!")
     else:
         logger.info("✓ Connection string contains all required parts")
 else:
-    logger.error("❌ EVENTHUB_CONNECTION_STRING is empty or None after cleaning!")
+    logger.error("EVENTHUB_CONNECTION_STRING is empty or None after cleaning!")
         
 logger.info(f"EVENTHUB_FULLY_QUALIFIED_NAMESPACE: {EVENTHUB_FULLY_QUALIFIED_NAMESPACE}")
 
@@ -256,28 +259,31 @@ def func():
         log_type = request.headers.get(LOG_TYPE)
         
         # Get request body
-        body = request.get_data()
+        raw_body = request.get_data()
         
+        if COMPRESSED_MESSAGE:
         # Decompress payload
-        try:
-            decompressed = gzip.decompress(body)
-            logger.debug(f"Decompressed data: {len(decompressed)} bytes")
-        except Exception as decompress_error:
-            logger.error(f"Failed to decompress data: {decompress_error}")
-            # If decompression fails, try to use the body as-is
-            if len(body) == 0:
-                logger.error("Empty body received")
-                return FAILURE_RESPONSE, 400, APPLICATION_JSON
-            decompressed = body
-        
-        decomp_body_length = len(decompressed)
-        if decomp_body_length == 0:
-            logger.error("Decompressed body is empty")
+            try:
+                body = gzip.decompress(raw_body)
+                logger.debug(f"Decompressed data: {len(body)} bytes")
+            except Exception as decompress_error:
+                logger.error(f"Failed to decompress data: {decompress_error}")
+                # If decompression fails, try to use the body as-is
+                if len(raw_body) == 0:
+                    logger.error("Empty body received")
+                    return FAILURE_RESPONSE, 400, APPLICATION_JSON
+                body = raw_body
+        else:
+            body = raw_body
+
+        body_length = len(body)
+        if body_length == 0:
+            logger.error("Body is empty")
             return FAILURE_RESPONSE, 400, APPLICATION_JSON
         
         # Send to Event Hub
-        send_to_eventhub(decompressed, log_type)
-        logger.info(f"Successfully forwarded {decomp_body_length} bytes to Event Hub")
+        send_to_eventhub(body, log_type)
+        logger.info(f"Successfully forwarded {body_length} bytes to Event Hub")
         
     except UnAuthorizedException:
         return FAILURE_RESPONSE, 401, APPLICATION_JSON
@@ -294,90 +300,6 @@ def func():
 @app.route('/health', methods=['GET'])
 def health():
     return SUCCESS_RESPONSE, 200, APPLICATION_JSON
-
-
-@app.route('/config-check', methods=['GET'])
-def config_check():
-    """
-    Diagnostic endpoint to check Event Hub configuration
-    Access at: https://your-webapp.azurewebsites.net/config-check
-    """
-    import re
-    
-    diagnostic_info = {
-        "eventhub_name": EVENTHUB_NAME,
-        "eventhub_name_set": EVENTHUB_NAME is not None,
-        "connection_string_set": EVENTHUB_CONNECTION_STRING is not None,
-        "connection_string_length": len(EVENTHUB_CONNECTION_STRING) if EVENTHUB_CONNECTION_STRING else 0,
-    }
-    
-    # Check for Azure Managed Identity environment variables
-    msi_endpoint = os.environ.get('MSI_ENDPOINT')
-    msi_secret = os.environ.get('MSI_SECRET')
-    identity_endpoint = os.environ.get('IDENTITY_ENDPOINT')
-    identity_header = os.environ.get('IDENTITY_HEADER')
-    
-    has_managed_identity_env = bool(msi_endpoint or identity_endpoint)
-    diagnostic_info['azure_managed_identity_detected'] = has_managed_identity_env
-    
-    if has_managed_identity_env:
-        diagnostic_info['managed_identity_env_vars'] = {
-            'MSI_ENDPOINT': bool(msi_endpoint),
-            'MSI_SECRET': bool(msi_secret),
-            'IDENTITY_ENDPOINT': bool(identity_endpoint),
-            'IDENTITY_HEADER': bool(identity_header)
-        }
-        diagnostic_info['managed_identity_warning'] = "Azure Managed Identity detected - may interfere with connection string authentication!"
-    
-    if EVENTHUB_CONNECTION_STRING:
-        # Check for required parts
-        required_parts = {
-            'has_endpoint': 'Endpoint=' in EVENTHUB_CONNECTION_STRING,
-            'has_keyname': 'SharedAccessKeyName=' in EVENTHUB_CONNECTION_STRING,
-            'has_key': 'SharedAccessKey=' in EVENTHUB_CONNECTION_STRING,
-            'has_entity_path': 'EntityPath=' in EVENTHUB_CONNECTION_STRING,
-        }
-        diagnostic_info.update(required_parts)
-        
-        # Extract EntityPath if present
-        if required_parts['has_entity_path']:
-            entity_match = re.search(r'EntityPath=([^;]+)', EVENTHUB_CONNECTION_STRING)
-            if entity_match:
-                entity_path_value = entity_match.group(1)
-                diagnostic_info['entity_path_value'] = entity_path_value
-                diagnostic_info['name_matches_entity_path'] = (EVENTHUB_NAME == entity_path_value) if EVENTHUB_NAME else None
-        
-        # Preview (safe)
-        if len(EVENTHUB_CONNECTION_STRING) > 100:
-            diagnostic_info['connection_string_preview'] = f"{EVENTHUB_CONNECTION_STRING[:50]}...{EVENTHUB_CONNECTION_STRING[-20:]}"
-        
-        # Check length
-        if len(EVENTHUB_CONNECTION_STRING) < 150:
-            diagnostic_info['warning'] = f"Connection string seems too short ({len(EVENTHUB_CONNECTION_STRING)} chars). May be truncated!"
-    
-    # Determine if configuration is valid
-    is_valid = (
-        EVENTHUB_CONNECTION_STRING and
-        'Endpoint=' in EVENTHUB_CONNECTION_STRING and
-        'SharedAccessKeyName=' in EVENTHUB_CONNECTION_STRING and
-        'SharedAccessKey=' in EVENTHUB_CONNECTION_STRING and
-        len(EVENTHUB_CONNECTION_STRING) > 150
-    )
-    
-    diagnostic_info['configuration_valid'] = is_valid
-    diagnostic_info['producer_initialized'] = producer_client is not None
-    
-    if not is_valid:
-        diagnostic_info['errors'] = []
-        if not EVENTHUB_CONNECTION_STRING:
-            diagnostic_info['errors'].append("EVENTHUB_CONNECTION_STRING not set")
-        elif len(EVENTHUB_CONNECTION_STRING) < 150:
-            diagnostic_info['errors'].append("Connection string too short - likely truncated")
-        if EVENTHUB_CONNECTION_STRING and 'SharedAccessKey=' not in EVENTHUB_CONNECTION_STRING:
-            diagnostic_info['errors'].append("Missing SharedAccessKey in connection string")
-    
-    return json.dumps(diagnostic_info, indent=2), 200, {'ContentType': 'application/json'} 
-
 
 def cleanup():
     """Close Event Hub producer client on application shutdown"""
