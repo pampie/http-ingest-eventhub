@@ -26,7 +26,10 @@ COMPRESSED_MESSAGE = os.environ.get('COMPRESSED_MESSAGE', 'true').lower() == 'tr
 # Event Hub Configuration - Clean and strip environment variables
 EVENTHUB_FULLY_QUALIFIED_NAMESPACE = os.environ.get('EVENTHUB_FULLY_QUALIFIED_NAMESPACE', '').strip().strip('"').strip("'")  # e.g., 'yournamespace.servicebus.windows.net'
 EVENTHUB_NAME = os.environ.get('EVENTHUB_NAME', '').strip().strip('"').strip("'")
-EVENTHUB_CONNECTION_STRING = os.environ.get('EVENTHUB_CONNECTION_STRING', '').strip().strip('"').strip("'")  # Optional: for connection string auth
+# Prefer connection string from 'EVENTHUBCONNSTR_' prefix if available
+EVENTHUB_CONNECTION_STRING = os.environ.get('EVENTHUBCONNSTR_EVENTHUB_CONNECTION_STRING', '').strip().strip('"').strip("'")  # Optional: for connection string auth
+if not EVENTHUB_CONNECTION_STRING:
+    EVENTHUB_CONNECTION_STRING = os.environ.get('EVENTHUB_CONNECTION_STRING', '').strip().strip('"').strip("'")
 
 # Clean empty strings to None
 EVENTHUB_FULLY_QUALIFIED_NAMESPACE = EVENTHUB_FULLY_QUALIFIED_NAMESPACE if EVENTHUB_FULLY_QUALIFIED_NAMESPACE else None
