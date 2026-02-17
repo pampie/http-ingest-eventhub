@@ -36,9 +36,16 @@ EVENTHUB_FULLY_QUALIFIED_NAMESPACE = EVENTHUB_FULLY_QUALIFIED_NAMESPACE if EVENT
 EVENTHUB_NAME = EVENTHUB_NAME if EVENTHUB_NAME else None
 EVENTHUB_CONNECTION_STRING = EVENTHUB_CONNECTION_STRING if EVENTHUB_CONNECTION_STRING else None
 
+# Authentication configuration
+# AUTH_MODE: 'basic' (default) = Basic Auth, 'x-secret' = X-Secret header
+AUTH_MODE = os.environ.get('AUTH_MODE', 'basic').strip().lower()
+
 # Basic Auth credentials for the HTTP endpoint
 BASIC_AUTH_USERNAME = os.environ.get('BASIC_AUTH_USERNAME', 'admin').strip()
 BASIC_AUTH_PASSWORD = os.environ.get('BASIC_AUTH_PASSWORD', 'password').strip()
+
+# X-Secret header authentication
+X_SECRET_VALUE = os.environ.get('X_SECRET_VALUE', '').strip()
 
 # Debug: Print configuration (without exposing full secrets)
 logger.info("=== Event Hub Configuration ===")
@@ -175,6 +182,18 @@ except Exception as init_error:
     raise
 
 BASIC_AUTH = base64.b64encode("{}:{}".format(BASIC_AUTH_USERNAME, BASIC_AUTH_PASSWORD).encode()).decode("utf-8")
+
+# Validate AUTH_MODE configuration
+if AUTH_MODE not in ('basic', 'x-secret'):
+    logger.warning(f"Invalid AUTH_MODE '{AUTH_MODE}', falling back to 'basic'")
+    AUTH_MODE = 'basic'
+
+if AUTH_MODE == 'x-secret' and not X_SECRET_VALUE:
+    logger.error("AUTH_MODE is 'x-secret' but X_SECRET_VALUE is not set!")
+    raise Exception("X_SECRET_VALUE environment variable must be set when AUTH_MODE is 'x-secret'")
+
+logger.info(f"Authentication mode: {AUTH_MODE}")
+
 LOG_TYPE = 'Log-Type'
 FAILURE_RESPONSE = json.dumps({'success':False})
 SUCCESS_RESPONSE = json.dumps({'success':True})
@@ -349,21 +368,31 @@ def func():
     Expects Basic authentication in the Authorization header.
     """
     try:
-        # Extract authorization header
-        auth_header = request.headers.get("authorization")
-        if not auth_header:
-            logger.error("Missing authorization header")
-            raise UnAuthorizedException()
-        
-        # Verify Basic authentication
-        if "Basic" in auth_header:
-            basic_auth_value = auth_header.replace("Basic ", "").strip()
-            if basic_auth_value != BASIC_AUTH:
-                logger.error("Unauthorized: Basic auth mismatch")
+        # Authenticate based on configured AUTH_MODE
+        if AUTH_MODE == 'x-secret':
+            # X-Secret header authentication
+            secret_header = request.headers.get("X-Secret")
+            if not secret_header:
+                logger.error("Missing X-Secret header")
+                raise UnAuthorizedException()
+            if secret_header != X_SECRET_VALUE:
+                logger.error("Unauthorized: X-Secret mismatch")
                 raise UnAuthorizedException()
         else:
-            logger.error("Unauthorized: Basic auth not found")
-            raise UnAuthorizedException()
+            # Basic authentication (default)
+            auth_header = request.headers.get("authorization")
+            if not auth_header:
+                logger.error("Missing authorization header")
+                raise UnAuthorizedException()
+            
+            if "Basic" in auth_header:
+                basic_auth_value = auth_header.replace("Basic ", "").strip()
+                if basic_auth_value != BASIC_AUTH:
+                    logger.error("Unauthorized: Basic auth mismatch")
+                    raise UnAuthorizedException()
+            else:
+                logger.error("Unauthorized: Basic auth not found")
+                raise UnAuthorizedException()
         
         # Get the log type from headers (optional)
         log_type = request.headers.get(LOG_TYPE)
