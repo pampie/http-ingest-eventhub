@@ -1,3 +1,5 @@
+--trusted-host files.pythonhosted.org
+--trusted-host pypi.org
 azure-eventhub>=5.15.1
 azure-identity>=1.12.0
 Flask>=2.2.5
